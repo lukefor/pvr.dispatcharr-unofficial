@@ -63,7 +63,15 @@ public:
   // --- Channels ---
   PVR_ERROR GetChannelsAmount(int& amount) override;
   PVR_ERROR GetChannels(bool radio, kodi::addon::PVRChannelsResultSet& results) override;
-  PVR_ERROR GetChannelStreamProperties(const kodi::addon::PVRChannel& channel,
+  // Kodi 22's PVR API adds the `source` argument here (PVR instance API
+  // 9.x): it is PVR_SOURCE_EPG_AS_LIVE when this call came from an EPG tag
+  // whose GetEPGTagStreamProperties() set
+  // PVR_STREAM_PROPERTY_EPGPLAYBACKASLIVE, and PVR_SOURCE::DEFAULT for a
+  // plain channel tune. This addon never sets that property (it was tried
+  // for catch-up and reverted; see GetEPGTagStreamProperties()'s own
+  // comment and docs/CATCHUP.md), so in practice `source` is always
+  // DEFAULT here and the implementation ignores it.
+  PVR_ERROR GetChannelStreamProperties(const kodi::addon::PVRChannel& channel, PVR_SOURCE source,
                                        std::vector<kodi::addon::PVRStreamProperty>& properties) override;
 
   // Server-side timeshift's actual playback path: GetChannelStreamProperties()
@@ -119,11 +127,32 @@ public:
   // PVR_STREAM_PROPERTY_STREAMURL from GetRecordingStreamProperties() for
   // this path the way live channels and catch-up work. See
   // DispatcharrClient::OpenRecordingStream().
-  bool OpenRecordedStream(const kodi::addon::PVRRecording& recording) override;
-  void CloseRecordedStream() override;
-  int ReadRecordedStream(unsigned char* buffer, unsigned int size) override;
-  int64_t SeekRecordedStream(int64_t position, int whence) override;
-  int64_t LengthRecordedStream() override;
+  //
+  // Kodi 22 (PVR instance API 9.x) threads an addon-assigned `streamId`
+  // through all five of these, so a client that opts into
+  // PVRCapabilities::SetSupportsMultipleRecordedStreams() can have more
+  // than one recording open at once. This addon does not opt in (see
+  // GetCapabilities()), so there is only ever one open recorded stream and
+  // the id exists purely so Kodi can name it; m_recordedStreamId below is
+  // the whole of the bookkeeping.
+  //
+  // Worth knowing for anyone extending this: because that capability stays
+  // off, Kodi-core routes the *rest* of the recorded-stream callbacks
+  // through the generic, non-id'd ones rather than the new per-stream
+  // variants -- CPVRClient::IsRecordedStreamRealTime(),
+  // PauseRecordedStream() and GetRecordedStreamTimes() each fall back to
+  // IsRealTimeStream(), PauseStream() and GetStreamTimes() when
+  // SupportsMultipleRecordedStreams() is false (confirmed by reading
+  // Kodi's own xbmc/pvr/addons/PVRClient.cpp on the 22.0 tag). That is why
+  // this addon still implements only GetStreamTimes()/IsRealTimeStream()
+  // and gets identical in-progress-recording seek behaviour to Kodi 21 --
+  // do not "fix" that by adding the per-stream overrides without also
+  // turning the capability on, or they will simply never be called.
+  bool OpenRecordedStream(const kodi::addon::PVRRecording& recording, int64_t& streamId) override;
+  void CloseRecordedStream(int64_t streamId) override;
+  int ReadRecordedStream(int64_t streamId, unsigned char* buffer, unsigned int size) override;
+  int64_t SeekRecordedStream(int64_t streamId, int64_t position, int whence) override;
+  int64_t LengthRecordedStream(int64_t streamId) override;
 
   // --- Timers ---
   PVR_ERROR GetTimerTypes(std::vector<kodi::addon::PVRTimerType>& types) override;
@@ -363,6 +392,17 @@ private:
   // install before anyone's done that extra setup -- Off "just works" out
   // of the box, Local and server-side are both explicit opt-ins.
   std::atomic<int> m_liveTimeshiftMode{kLiveTimeshiftOff};
+
+  // Kodi 22 recorded-stream handle (see the OpenRecordedStream() block
+  // above). kNoRecordedStream deliberately matches the value Kodi-core's
+  // CInputStreamPVRRecording initialises its own m_streamId to, because
+  // Kodi calls CloseRecordedStream(streamId) *before* every
+  // OpenRecordedStream() for a single-stream client -- so the very first
+  // close of a playback session arrives with this value and must be a
+  // no-op rather than tearing down a stream that was never opened.
+  static constexpr int64_t kNoRecordedStream = -1;
+  int64_t m_recordedStreamId{kNoRecordedStream};
+  int64_t m_nextRecordedStreamId{1};
   std::atomic<bool> m_enableCatchupFfmpegdirectSeek{false};
   std::atomic<bool> m_debugLogging{false};
   // Fetched once at startup (see the constructor) via

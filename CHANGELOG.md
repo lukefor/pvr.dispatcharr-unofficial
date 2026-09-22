@@ -10,6 +10,59 @@ Versions before `0.2.0` aren't itemized here -- that was this project's
 initial scaffold and buildout, before it had any tagged releases to
 compare against.
 
+## [0.12.0] - 2026-09-22
+
+Addon only -- neither companion plugin changed for this pass.
+
+### Changed
+
+- **Targets Kodi 22 ("Piers") instead of Kodi 21 ("Omega").** Kodi 22
+  raises the PVR instance API from 8.3.0 to 9.2.0 and raises its
+  *minimum* to 9.2.0 at the same time, so the two are mutually exclusive
+  by design: a build compiled against Kodi 22 will not load in Kodi 21,
+  and there is no single binary that covers both. **If you are still on
+  Kodi 21, stay on `0.11.0`** -- it remains the last Omega build and is
+  unaffected by this release.
+
+  Six addon entry points changed signature, all of them required:
+
+  - `GetChannelStreamProperties()` gained a `PVR_SOURCE source`
+    argument, which distinguishes a normal channel tune from playing an
+    EPG programme "as live". This addon never sets
+    `PVR_STREAM_PROPERTY_EPGPLAYBACKASLIVE` (that was tried for catch-up
+    and reverted long ago; see [docs/CATCHUP.md](docs/CATCHUP.md)), so
+    the value is always `DEFAULT` in practice and the live-stream
+    handling is unchanged.
+  - `OpenRecordedStream()`, `CloseRecordedStream()`,
+    `ReadRecordedStream()`, `SeekRecordedStream()` and
+    `LengthRecordedStream()` each gained a `streamId`, so a client can
+    opt into having several recordings open at once. This addon does not
+    opt in, so there is still exactly one recorded stream at a time and
+    the id is only bookkeeping -- with one real consequence worth
+    knowing: Kodi 22 calls `CloseRecordedStream()` once *before* every
+    `OpenRecordedStream()`, which Kodi 21 did not, so that first close
+    is now recognised by its stream id and ignored instead of running
+    the teardown path against a stream that was never opened.
+
+  Recording playback behaviour is otherwise deliberately identical to
+  `0.11.0`, including in-progress recording pause/seek. Kodi 22 adds
+  per-stream `IsRecordedStreamRealTime()`, `PauseRecordedStream()` and
+  `GetRecordedStreamTimes()` callbacks, but routes recorded streams
+  through the existing non-per-stream `IsRealTimeStream()`,
+  `PauseStream()` and `GetStreamTimes()` for any client that hasn't
+  opted into multiple recorded streams (confirmed by reading Kodi's own
+  `xbmc/pvr/addons/PVRClient.cpp` at the `22.0b2-Piers` tag), so those
+  are intentionally not implemented here.
+
+- **CI, CoreELEC packaging and the build docs now target Kodi 22.**
+  `KODI_BRANCH` is pinned to the `22.0b2-Piers` tag rather than tracking
+  `master`: Piers has not been branched off `master` yet, and tracking
+  `master` would silently start compiling against Kodi 23's API the
+  moment it is. [docs/BUILDING.md](docs/BUILDING.md)'s CoreELEC section
+  is inverted accordingly -- `coreelec-22` is now the branch that
+  builds, and the six `override` mismatches it previously documented as
+  the reason to avoid that branch are exactly what this release fixes.
+
 ## [0.11.0] - 2026-09-16
 
 Addon only -- neither companion plugin changed for this pass.

@@ -13,8 +13,12 @@
 # PKG_SHA256 once a release is tagged.
 
 PKG_NAME="pvr.dispatcharr-unofficial"
-PKG_VERSION="0.11.0"
-PKG_SHA256="b64d8f2da60fab08dd42cdbe29ee664502752b1693f8242810fd4d1f45f17706"
+PKG_VERSION="0.12.0"
+# Recomputed against the real release tarball after the tag is pushed and the
+# release is published -- see step 2 of the "CoreELEC on an ODROID N2+"
+# section of ../../../docs/BUILDING.md, including why hashing this before the
+# release exists silently hashes GitHub's 404 page instead.
+PKG_SHA256=""
 PKG_REV="1"
 PKG_ARCH="any"
 PKG_LICENSE="GPL-2.0-or-later"

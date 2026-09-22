@@ -16,7 +16,14 @@ permissions:
   contents: write # needed to upload release assets on a tag push
 
 env:
-  KODI_BRANCH: Omega # match whatever Kodi major version you're targeting
+  # Match whatever Kodi major version you're targeting. This addon targets
+  # Kodi 22 "Piers" (PVR instance API 9.x), which as of this writing has no
+  # release branch of its own yet -- it lives on xbmc/xbmc's `master`. Pinned
+  # to the `22.0b2-Piers` tag rather than tracking `master` directly so a CI
+  # result stays reproducible and so this build doesn't silently start
+  # compiling against Kodi 23's API the moment Piers is branched off master.
+  # When a real `Piers` branch appears, switch this to `Piers`.
+  KODI_BRANCH: 22.0b2-Piers
 
 jobs:
   # Enforces CLAUDE.md's "run clang-format/ruff format before committing"

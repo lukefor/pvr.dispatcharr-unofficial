@@ -940,9 +940,27 @@ PVR_ERROR PVRDispatcharr::GetChannels(bool radio, kodi::addon::PVRChannelsResult
   return PVR_ERROR_NO_ERROR;
 }
 
-PVR_ERROR PVRDispatcharr::GetChannelStreamProperties(const kodi::addon::PVRChannel& channel,
+PVR_ERROR PVRDispatcharr::GetChannelStreamProperties(const kodi::addon::PVRChannel& channel, PVR_SOURCE source,
                                                      std::vector<kodi::addon::PVRStreamProperty>& properties)
 {
+  // `source` (new in Kodi 22 / PVR instance API 9.x) is only ever
+  // PVR_SOURCE_EPG_AS_LIVE for an addon that sets
+  // PVR_STREAM_PROPERTY_EPGPLAYBACKASLIVE from
+  // GetEPGTagStreamProperties(). This one deliberately doesn't -- that was
+  // tried for catch-up and reverted (see that function's own comment and
+  // docs/CATCHUP.md) -- so every call lands here with PVR_SOURCE::DEFAULT
+  // and the live-stream handling below is correct either way: an
+  // "EPG as live" tune is, by definition, a request for the channel's
+  // normal live stream. Logged rather than silently dropped so an
+  // unexpected value shows up in a debug log instead of being invisible.
+  if (source != PVR_SOURCE::DEFAULT)
+  {
+    kodi::Log(ADDON_LOG_DEBUG,
+              "pvr.dispatcharr-unofficial: GetChannelStreamProperties: non-default source=%d, "
+              "serving the normal live stream",
+              static_cast<int>(source));
+  }
+
   std::string streamUrl;
   {
     std::lock_guard<std::mutex> lock(m_dataMutex);
@@ -1619,7 +1637,7 @@ PVR_ERROR PVRDispatcharr::GetRecordingEdl(const kodi::addon::PVRRecording& recor
   return PVR_ERROR_NO_ERROR;
 }
 
-bool PVRDispatcharr::OpenRecordedStream(const kodi::addon::PVRRecording& recording)
+bool PVRDispatcharr::OpenRecordedStream(const kodi::addon::PVRRecording& recording, int64_t& streamId)
 {
   int id = std::atoi(recording.GetRecordingId().c_str());
   std::string error;
@@ -1681,20 +1699,49 @@ bool PVRDispatcharr::OpenRecordedStream(const kodi::addon::PVRRecording& recordi
   // needs a restart to pick up. Confirmed live as a real bug without
   // this: it tore down the very stream that had just opened.
   PersistApiKeyIfChanged(keyBefore);
+
+  // Hand Kodi a fresh, never-reused handle for the stream just opened (see
+  // the header's OpenRecordedStream() block). Monotonic rather than a
+  // fixed constant purely so a stale id in a debug log is recognisable as
+  // stale instead of matching by accident.
+  m_recordedStreamId = m_nextRecordedStreamId++;
+  streamId = m_recordedStreamId;
   return true;
 }
 
-void PVRDispatcharr::CloseRecordedStream()
+void PVRDispatcharr::CloseRecordedStream(int64_t streamId)
 {
-  kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr-unofficial: CloseRecordedStream: isInProgressStreamOpen=%d",
-            m_client.IsInProgressRecordingStreamOpen() ? 1 : 0);
+  // Kodi-core calls this once with its own initial kNoRecordedStream
+  // before every OpenRecordedStream() (single-stream clients only; see the
+  // header), and again with the real id when playback actually ends.
+  // Closing on the first of those would mean tearing down whatever
+  // happened to be open -- or calling DispatcharrClient's close path with
+  // nothing open at all -- so anything that isn't the currently open
+  // handle is a no-op here.
+  if (streamId != m_recordedStreamId || m_recordedStreamId == kNoRecordedStream)
+  {
+    kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr-unofficial: CloseRecordedStream: ignoring streamId=%lld (open id=%lld)",
+              static_cast<long long>(streamId), static_cast<long long>(m_recordedStreamId));
+    return;
+  }
+
+  kodi::Log(ADDON_LOG_DEBUG, "pvr.dispatcharr-unofficial: CloseRecordedStream: streamId=%lld isInProgressStreamOpen=%d",
+            static_cast<long long>(streamId), m_client.IsInProgressRecordingStreamOpen() ? 1 : 0);
   if (m_client.IsInProgressRecordingStreamOpen())
     m_client.CloseInProgressRecordingStream();
   else
     m_client.CloseRecordingStream();
+  m_recordedStreamId = kNoRecordedStream;
 }
 
-int PVRDispatcharr::ReadRecordedStream(unsigned char* buffer, unsigned int size)
+// ReadRecordedStream()/SeekRecordedStream()/LengthRecordedStream() below
+// deliberately don't gate on streamId the way CloseRecordedStream() does.
+// Kodi only ever issues these against the handle it was just given by
+// OpenRecordedStream(), and refusing a mismatched id would turn a
+// hypothetical bookkeeping slip into silent playback failure rather than
+// something recoverable -- whereas an unguarded *close* has a concrete,
+// reachable failure mode (the pre-open close described above).
+int PVRDispatcharr::ReadRecordedStream(int64_t streamId, unsigned char* buffer, unsigned int size)
 {
   if (m_client.IsInProgressRecordingStreamOpen())
     return m_client.ReadInProgressRecordingStream(buffer, size);
@@ -1710,14 +1757,14 @@ int PVRDispatcharr::ReadRecordedStream(unsigned char* buffer, unsigned int size)
   return result;
 }
 
-int64_t PVRDispatcharr::SeekRecordedStream(int64_t position, int whence)
+int64_t PVRDispatcharr::SeekRecordedStream(int64_t streamId, int64_t position, int whence)
 {
   if (m_client.IsInProgressRecordingStreamOpen())
     return m_client.SeekInProgressRecordingStream(position, whence);
   return m_client.SeekRecordingStream(position, whence);
 }
 
-int64_t PVRDispatcharr::LengthRecordedStream()
+int64_t PVRDispatcharr::LengthRecordedStream(int64_t streamId)
 {
   if (m_client.IsInProgressRecordingStreamOpen())
     return m_client.GetInProgressRecordingStreamLength();
