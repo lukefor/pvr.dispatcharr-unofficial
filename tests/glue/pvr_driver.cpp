@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <curl/curl.h>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <random>
@@ -32,6 +33,7 @@ struct Collected
   std::vector<std::string> epgTitles;
   std::vector<PVR_RECORDING> recordings;
   std::vector<PVR_TIMER> timers;
+  std::deque<std::string> strs; // see pvr_stub.cpp's keep()
 };
 
 static int g_port;
@@ -58,6 +60,11 @@ static long ms()
     printf("\n");                                                                                                      \
     fflush(stdout);                                                                                                    \
   } while (0)
+// struct strings are pointers since PVR API 9.x, and the ones an entry doesn't set are null
+static const char* str(const char* s)
+{
+  return s ? s : "";
+}
 static void sleep_ms(int m)
 {
   std::this_thread::sleep_for(std::chrono::milliseconds(m));
@@ -105,10 +112,14 @@ static PVR_ERROR all_lists(Collected& c, bool withEpg)
   PVR_ERROR e;
   PVR_ADDON_CAPABILITIES caps{};
   A()->GetCapabilities(I(), &caps);
-  char buf[256];
-  A()->GetBackendName(I(), buf, sizeof buf);
-  A()->GetBackendVersion(I(), buf, sizeof buf);
-  A()->GetConnectionString(I(), buf, sizeof buf);
+  A()->FreeCapabilities(I(), &caps);
+  // Since PVR API 9.x the addon allocates every string and array it returns and Kodi hands each back to a Free*()
+  for (auto get : {A()->GetBackendName, A()->GetBackendVersion, A()->GetConnectionString})
+  {
+    char* s = nullptr;
+    if (get(I(), &s) == PVR_ERROR_NO_ERROR)
+      A()->FreeString(I(), s);
+  }
   A()->GetChannelGroupsAmount(I(), &n);
   e = A()->GetChannelGroups(I(), (PVR_HANDLE)&c, false);
   std::vector<PVR_CHANNEL_GROUP> groups;
@@ -128,9 +139,10 @@ static PVR_ERROR all_lists(Collected& c, bool withEpg)
   if (withEpg)
     for (auto& ch : chans)
       A()->GetEPGForChannel(I(), (PVR_HANDLE)&c, (int)ch.iUniqueId, time(nullptr) - 86400, time(nullptr) + 2 * 86400);
-  static thread_local std::vector<PVR_TIMER_TYPE> types(32);
-  int nt = 32;
-  A()->GetTimerTypes(I(), types.data(), &nt);
+  PVR_TIMER_TYPE** types = nullptr;
+  unsigned int nt = 0;
+  if (A()->GetTimerTypes(I(), &types, &nt) == PVR_ERROR_NO_ERROR)
+    A()->FreeTimerTypes(I(), types, nt);
   A()->GetTimersAmount(I(), &n);
   A()->GetTimers(I(), (PVR_HANDLE)&c);
   A()->GetRecordingsAmount(I(), false, &n);
@@ -163,15 +175,17 @@ static int timer_cycle(std::mt19937& rng, const std::vector<PVR_CHANNEL>& chans,
     t.iTimerType = 1;
     t.iEpgUid = PVR_TIMER_NO_EPG_UID;
   }
-  snprintf(t.strTitle, sizeof t.strTitle, "T%u", (unsigned)rng());
+  const std::string tTitle = "T" + std::to_string((unsigned)rng());
+  t.strTitle = tTitle.c_str();
   if (A()->AddTimer(I(), &t) != PVR_ERROR_NO_ERROR)
     fails++;
   // series
   PVR_TIMER s{};
   s.iTimerType = 2;
   s.iClientChannelUid = (int)ch.iUniqueId;
-  snprintf(s.strTitle, sizeof s.strTitle, "Show %u-1", ch.iChannelNumber);
-  snprintf(s.strEpgSearchString, sizeof s.strEpgSearchString, "Show %u-1", ch.iChannelNumber);
+  const std::string sTitle = "Show " + std::to_string(ch.iChannelNumber) + "-1";
+  s.strTitle = sTitle.c_str();
+  s.strEpgSearchString = sTitle.c_str();
   s.state = PVR_TIMER_STATE_SCHEDULED;
   s.bStartAnyTime = true;
   s.bEndAnyTime = true;
@@ -181,7 +195,8 @@ static int timer_cycle(std::mt19937& rng, const std::vector<PVR_CHANNEL>& chans,
   PVR_TIMER r{};
   r.iTimerType = 4;
   r.iClientChannelUid = (int)ch.iUniqueId;
-  snprintf(r.strTitle, sizeof r.strTitle, "Rec %u", (unsigned)rng());
+  const std::string rTitle = "Rec " + std::to_string((unsigned)rng());
+  r.strTitle = rTitle.c_str();
   r.startTime = now + 3600;
   r.endTime = now + 5400;
   r.firstDay = now;
@@ -197,7 +212,8 @@ static int timer_cycle(std::mt19937& rng, const std::vector<PVR_CHANNEL>& chans,
     if (x.state != PVR_TIMER_STATE_SCHEDULED)
       continue;
     PVR_TIMER u = x;
-    snprintf(u.strTitle, sizeof u.strTitle, "%s!", x.strTitle);
+    const std::string uTitle = std::string(x.strTitle ? x.strTitle : "") + "!";
+    u.strTitle = uTitle.c_str();
     if (u.iTimerType == 1 || u.iTimerType == 3)
     {
       u.startTime += 60;
@@ -216,9 +232,10 @@ static void stream_cycle(std::mt19937& rng, const std::vector<PVR_CHANNEL>& chan
   if (rng() % 2 && !chans.empty())
   {
     PVR_CHANNEL ch = chans[rng() % chans.size()];
-    PVR_NAMED_VALUE props[40];
+    PVR_NAMED_VALUE** props = nullptr;
     unsigned int np = 0;
-    A()->GetChannelStreamProperties(I(), &ch, props, &np);
+    if (A()->GetChannelStreamProperties(I(), &ch, DEFAULT, &props, &np) == PVR_ERROR_NO_ERROR)
+      A()->FreeProperties(I(), props, np);
     if (A()->OpenLiveStream(I(), &ch))
     {
       std::atomic<bool> stop{false};
@@ -249,10 +266,15 @@ static void stream_cycle(std::mt19937& rng, const std::vector<PVR_CHANNEL>& chan
   else if (!recs.empty())
   {
     PVR_RECORDING r = recs[rng() % recs.size()];
-    PVR_NAMED_VALUE props[40];
+    PVR_NAMED_VALUE** props = nullptr;
     unsigned int np = 0;
-    A()->GetRecordingStreamProperties(I(), &r, props, &np);
-    if (A()->OpenRecordedStream(I(), &r))
+    if (A()->GetRecordingStreamProperties(I(), &r, &props, &np) == PVR_ERROR_NO_ERROR)
+      A()->FreeProperties(I(), props, np);
+    // What Kodi 22's CPVRClient::OpenRecordedStream does for a client without multiple recorded streams: close the
+    // previous stream first, with the caller's id -- -1 when nothing was open.
+    int64_t streamId = -1;
+    A()->CloseRecordedStream(I(), streamId);
+    if (A()->OpenRecordedStream(I(), &r, &streamId))
     {
       std::atomic<bool> stop{false};
       std::thread times(
@@ -262,23 +284,24 @@ static void stream_cycle(std::mt19937& rng, const std::vector<PVR_CHANNEL>& chan
             {
               PVR_STREAM_TIMES st{};
               A()->GetStreamTimes(I(), &st);
-              A()->LengthRecordedStream(I());
+              A()->LengthRecordedStream(I(), streamId);
               sleep_ms(50);
             }
           });
       for (int i = 0; i < 15; i++)
       {
-        A()->ReadRecordedStream(I(), buf.data(), (unsigned)buf.size());
+        A()->ReadRecordedStream(I(), streamId, buf.data(), (unsigned)buf.size());
         if (i == 7)
-          A()->SeekRecordedStream(I(), 0, SEEK_SET);
+          A()->SeekRecordedStream(I(), streamId, 0, SEEK_SET);
       }
       stop = true;
       times.join();
-      A()->CloseRecordedStream(I());
+      A()->CloseRecordedStream(I(), streamId);
     }
-    PVR_EDL_ENTRY edl[PVR_ADDON_EDL_LENGTH];
-    int ne = PVR_ADDON_EDL_LENGTH;
-    A()->GetRecordingEdl(I(), &r, edl, &ne);
+    PVR_EDL_ENTRY** edl = nullptr;
+    unsigned int ne = 0;
+    if (A()->GetRecordingEdl(I(), &r, &edl, &ne) == PVR_ERROR_NO_ERROR)
+      A()->FreeEdlEntries(I(), edl, ne);
   }
 }
 
@@ -378,9 +401,9 @@ int main(int argc, char** argv)
       FAIL("the surface scenario loaded no channels");
     for (auto& ch : c0c.channels)
       INFO(" ch uid=%u num=%u.%u name=%s archive=%d", ch.iUniqueId, ch.iChannelNumber, ch.iSubChannelNumber,
-           ch.strChannelName, ch.bHasArchive);
+           str(ch.strChannelName), ch.bHasArchive);
     for (auto& r : c0c.recordings)
-      INFO(" rec id=%s title=%s dir=%s", r.strRecordingId, r.strTitle, r.strDirectory);
+      INFO(" rec id=%s title=%s dir=%s", str(r.strRecordingId), str(r.strTitle), str(r.strDirectory));
     std::atomic<bool> stop{false};
     std::atomic<long> cycles{0}, tfails{0};
     std::vector<std::thread> th;
@@ -488,6 +511,7 @@ int main(int argc, char** argv)
     time_t now = time(nullptr);
     // EPG-based one-time on channel 6 (5.1), next programme
     PVR_TIMER t{};
+    std::string tTitle;
     t.iTimerType = 3;
     t.iClientChannelUid = 6;
     t.state = PVR_TIMER_STATE_SCHEDULED;
@@ -497,13 +521,14 @@ int main(int argc, char** argv)
         t.startTime = c.epg[i].startTime;
         t.endTime = c.epg[i].endTime;
         t.iEpgUid = c.epg[i].iUniqueBroadcastId;
-        snprintf(t.strTitle, sizeof t.strTitle, "%s", c.epgTitles[i].c_str());
+        tTitle = c.epgTitles[i];
+        t.strTitle = tTitle.c_str();
         break;
       }
     auto mustAdd = [&](const char* what2, PVR_TIMER* timer)
     {
       PVR_ERROR rc = A()->AddTimer(I(), timer);
-      INFO("AddTimer %s: %d (epguid %u title %s)", what2, rc, timer->iEpgUid, timer->strTitle);
+      INFO("AddTimer %s: %d (epguid %u title %s)", what2, rc, timer->iEpgUid, str(timer->strTitle));
       if (rc != PVR_ERROR_NO_ERROR)
         FAIL("AddTimer %s failed (%d)", what2, rc);
     };
@@ -517,12 +542,12 @@ int main(int argc, char** argv)
     inst.startTime = 0;
     inst.endTime = now + 1800;
     inst.iEpgUid = PVR_TIMER_NO_EPG_UID;
-    snprintf(inst.strTitle, sizeof inst.strTitle, "Instant");
+    inst.strTitle = "Instant";
     mustAdd("instant", &inst);
     PVR_TIMER r{};
     r.iTimerType = 4;
     r.iClientChannelUid = 1;
-    snprintf(r.strTitle, sizeof r.strTitle, "Daily");
+    r.strTitle = "Daily";
     r.startTime = now + 3600;
     r.endTime = now + 5400;
     r.firstDay = now;
@@ -531,8 +556,8 @@ int main(int argc, char** argv)
     PVR_TIMER s{};
     s.iTimerType = 2;
     s.iClientChannelUid = 3;
-    snprintf(s.strTitle, sizeof s.strTitle, "Show 3-1");
-    snprintf(s.strEpgSearchString, sizeof s.strEpgSearchString, "Show 3-1");
+    s.strTitle = "Show 3-1";
+    s.strEpgSearchString = "Show 3-1";
     s.bStartAnyTime = s.bEndAnyTime = true;
     mustAdd("series", &s);
     sleep_ms(1500);
@@ -547,12 +572,12 @@ int main(int argc, char** argv)
     for (auto& x : tt.timers)
       INFO(" timer idx=%u parent=%u type=%u ch=%d state=%d start=%ld end=%ld epg=%u title='%s' days=%u first=%ld",
            x.iClientIndex, x.iParentClientIndex, x.iTimerType, x.iClientChannelUid, x.state, (long)x.startTime - now,
-           (long)x.endTime - now, x.iEpgUid, x.strTitle, x.iWeekdays, (long)x.firstDay);
+           (long)x.endTime - now, x.iEpgUid, str(x.strTitle), x.iWeekdays, (long)x.firstDay);
     Collected rr;
     A()->GetRecordings(I(), (PVR_HANDLE)&rr, false);
     for (auto& x : rr.recordings)
-      INFO(" rec id=%s title='%s' ch=%d dur=%d epg=%u", x.strRecordingId, x.strTitle, x.iChannelUid, x.iDuration,
-           x.iEpgEventId);
+      INFO(" rec id=%s title='%s' ch=%d dur=%d epg=%u", str(x.strRecordingId), str(x.strTitle), x.iChannelUid,
+           x.iDuration, x.iEpgEventId);
     printf("serverdb=%s\n", http("/__db").c_str());
   }
   else if (what == "refresh_events")
@@ -610,7 +635,7 @@ int main(int argc, char** argv)
       A()->GetTimers(I(), (PVR_HANDLE)&tt);
       for (auto& x : tt.timers)
         // the rule itself (a repeating timer), not the occurrence listed under it, which has the same title
-        if (x.iTimerType == 4 && std::string(x.strTitle) == "ZZZ offset rule")
+        if (x.iTimerType == 4 && std::string(str(x.strTitle)) == "ZZZ offset rule")
           return (long)x.startTime;
       return -1;
     };

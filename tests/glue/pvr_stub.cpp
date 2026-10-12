@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <string>
@@ -240,24 +241,42 @@ struct Collected
   std::vector<std::string> epgTitles;
   std::vector<PVR_RECORDING> recordings;
   std::vector<PVR_TIMER> timers;
+  std::deque<std::string> strs; // owns the strings the entries above point at (a deque never moves its elements)
 };
+// Since PVR API 9.x (Kodi 22) every struct carries its strings as pointers into the addon's own temporary, valid only
+// during the transfer call, where they used to be fixed char arrays copied with the struct. Kodi copies them into its
+// own tags; the entries collected here are used again later (printed, passed back to AddTimer/OpenRecordedStream), so
+// keep a copy that lives as long as the Collected does.
+static void keep(Collected* r, const char*& s)
+{
+  if (!s)
+    return;
+  r->strs.emplace_back(s);
+  s = r->strs.back().c_str();
+}
 static void t_chan(void*, const PVR_HANDLE h, const PVR_CHANNEL* c)
 {
   auto* r = (Collected*)h;
   std::lock_guard<std::mutex> g(r->mu);
   r->channels.push_back(*c);
+  auto& x = r->channels.back();
+  keep(r, x.strChannelName);
+  keep(r, x.strMimeType);
+  keep(r, x.strIconPath);
 }
 static void t_group(void*, const PVR_HANDLE h, const PVR_CHANNEL_GROUP* c)
 {
   auto* r = (Collected*)h;
   std::lock_guard<std::mutex> g(r->mu);
   r->groups.push_back(*c);
+  keep(r, r->groups.back().strGroupName);
 }
 static void t_member(void*, const PVR_HANDLE h, const PVR_CHANNEL_GROUP_MEMBER* c)
 {
   auto* r = (Collected*)h;
   std::lock_guard<std::mutex> g(r->mu);
   r->members.push_back(*c);
+  keep(r, r->members.back().strGroupName);
 }
 static void t_epg(void*, const PVR_HANDLE h, const EPG_TAG* c)
 {
@@ -286,12 +305,24 @@ static void t_rec(void*, const PVR_HANDLE h, const PVR_RECORDING* c)
   auto* r = (Collected*)h;
   std::lock_guard<std::mutex> g(r->mu);
   r->recordings.push_back(*c);
+  auto& x = r->recordings.back();
+  for (const char** f : {&x.strRecordingId, &x.strTitle, &x.strTitleExtraInfo, &x.strEpisodeName, &x.strDirectory,
+                         &x.strPlotOutline, &x.strPlot, &x.strGenreDescription, &x.strChannelName, &x.strIconPath,
+                         &x.strThumbnailPath, &x.strFanartPath, &x.strFirstAired, &x.strProviderName,
+                         &x.strParentalRatingCode, &x.strParentalRatingIcon, &x.strParentalRatingSource})
+    keep(r, *f);
 }
 static void t_timer(void*, const PVR_HANDLE h, const PVR_TIMER* c)
 {
   auto* r = (Collected*)h;
   std::lock_guard<std::mutex> g(r->mu);
   r->timers.push_back(*c);
+  auto& x = r->timers.back();
+  for (const char** f : {&x.strTitle, &x.strEpgSearchString, &x.strDirectory, &x.strSummary, &x.strSeriesLink})
+    keep(r, *f);
+  // an array owned by the addon's temporary too; nothing here reads it
+  x.customProps = nullptr;
+  x.iCustomPropsSize = 0;
 }
 static void t_trigger(void*)
 {
