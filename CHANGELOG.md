@@ -18,6 +18,73 @@ compare against.
   writes those as event playlists), catch-up, timers and recurring rules, the real-time recording push and live
   timeshift all work against it, on a 64-bit Android phone and on the other devices tested.
 
+## [0.12.0-kodi22] - 2026-10-12
+
+The `Piers` branch's first release: `0.12.0`'s code, built for Kodi 22
+("Piers") instead of Kodi 21 ("Omega"). Addon only -- neither companion
+plugin changed, and nothing below alters behaviour on Kodi 21, which
+continues from the `Omega` branch and its own `0.12.0`.
+
+### Changed
+
+- **Targets Kodi 22 ("Piers").** Kodi 22 raises the PVR instance API from
+  8.3.0 to 9.2.0 and raises its *minimum* to 9.2.0 at the same time, so
+  the two lines are mutually exclusive by design: this build will not load
+  in Kodi 21, and `Omega`'s will not load in Kodi 22. There is no single
+  binary that covers both, which is why this is a branch rather than a
+  replacement. **On Kodi 21, use the `Omega` branch.**
+
+  Six addon entry points changed signature, all of them required, and
+  exactly the six that `docs/BUILDING.md` had already recorded as the
+  reason a `coreelec-22` cross-compile failed:
+
+  - `GetChannelStreamProperties()` gained a `PVR_SOURCE source` argument,
+    which distinguishes a normal channel tune from playing an EPG
+    programme "as live". This addon never sets
+    `PVR_STREAM_PROPERTY_EPGPLAYBACKASLIVE` (tried for catch-up and
+    reverted; see [docs/CATCHUP.md](docs/CATCHUP.md)), so the value is
+    always `DEFAULT` in practice and the live-stream handling is
+    unchanged.
+  - `OpenRecordedStream()`, `CloseRecordedStream()`,
+    `ReadRecordedStream()`, `SeekRecordedStream()` and
+    `LengthRecordedStream()` each gained a `streamId`, so a client can opt
+    into having several recordings open at once. This addon does not opt
+    in, so there is still exactly one recorded stream at a time and the id
+    is only bookkeeping -- with one real consequence: Kodi 22 calls
+    `CloseRecordedStream()` once *before* every `OpenRecordedStream()`,
+    which Kodi 21 did not, so that first close is now recognised by its
+    stream id and ignored instead of running the teardown path against a
+    stream that was never opened.
+
+  Recording playback behaviour is otherwise deliberately identical to
+  `0.12.0`, including in-progress recording pause/seek. Kodi 22 adds
+  per-stream `IsRecordedStreamRealTime()`, `PauseRecordedStream()` and
+  `GetRecordedStreamTimes()` callbacks, but routes recorded streams
+  through the existing non-per-stream `IsRealTimeStream()`,
+  `PauseStream()` and `GetStreamTimes()` for any client that hasn't opted
+  into multiple recorded streams (confirmed by reading Kodi's own
+  `xbmc/pvr/addons/PVRClient.cpp` on the `Piers` branch), so those are
+  intentionally not implemented here.
+
+- **CI builds against Kodi 22.** `KODI_BRANCH` is `Piers` and
+  `KODI_COMMIT` is pinned to the `22.0rc1-Piers` tag's commit -- a tagged
+  release point rather than a branch head, because Piers is an active
+  branch and that tag is the exact tree these signatures were compiled
+  against. The workflow's push trigger now covers `Piers` as well as
+  `Omega`. [docs/BUILDING.md](docs/BUILDING.md)'s CoreELEC guidance is
+  inverted to match: `coreelec-22` is now the branch that builds.
+
+- **The addon version may carry a release suffix.**
+  `tools/tests/test_version_sync.py` required a bare `X.Y.Z` for the
+  addon; it now also accepts a `-<release>` part, which this branch's
+  `0.12.0-kodi22` uses to distinguish itself from `Omega`'s `0.12.0`
+  without pretending to be a different release of the code. Kodi's own
+  addon-version grammar is `epoch:version-release`, and a non-empty
+  release sorts above an empty one, so a Kodi 22 build upgrades cleanly
+  over the same core version built for Kodi 21. The two plugins' versions
+  are still held to bare semver, and `addon.xml.in` and `package.mk` must
+  still agree exactly.
+
 ## [0.12.0] - 2026-10-07
 
 Addon changes since `0.11.0`. This release also bundles `timeshift_buffer` `0.8.13` and `recording_edl` `0.2.3`

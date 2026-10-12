@@ -18,12 +18,16 @@ it by hand instead.
 
 ## Linux / macOS (x86_64)
 
-1. Clone a Kodi source tree matching your target Kodi major version (e.g.
-   the `Omega` branch for Kodi 21.x, since that's roughly what CoreELEC on
-   an ODROID N2+ ships):
+1. Clone a Kodi source tree matching your target Kodi major version. This
+   branch targets Kodi 22 "Piers" (PVR instance API 9.x), which now has a
+   release branch of its own:
    ```bash
-   git clone --branch Omega --depth 1 https://github.com/xbmc/xbmc.git kodi-source
+   git clone --branch Piers --depth 1 https://github.com/xbmc/xbmc.git kodi-source
    ```
+   Building against `Omega` instead gives you a Kodi 21 addon, which will
+   not load in Kodi 22: Kodi 22 raised the PVR instance API from 8.3.0 to
+   9.2.0 *and* its minimum to 9.2.0, so the two are mutually exclusive by
+   design. For Kodi 21, build this repo's `Omega` branch instead.
    (CI does not track the branch: `KODI_COMMIT` in `.github/workflows/build.yml` names the exact Kodi
    commit every job builds, so a release build never picks up whatever Kodi pushed that day. To
    reproduce a CI build exactly, check that commit out instead.)
@@ -389,25 +393,28 @@ called out inline so a future rebuild doesn't have to rediscover them.
    budget 50GB free disk and expect the first build to take a while, since
    it also has to fetch/build the whole cross toolchain including GCC from
    source), clone CoreELEC at the branch matching your device's installed
-   CoreELEC major version -- **use the branch matching CoreELEC's current
-   *stable* release, not whatever branch happens to be default/newest**:
-   `coreelec-22` tracks Kodi 22 "Piers", which as of this writing is still
-   a beta (`22.0b2`) with a materially different PVR addon API (the
-   recorded-stream methods gained a `streamId` parameter for
-   concurrent-stream support) -- confirmed live by actually
-   cross-compiling against it, which failed with `override` mismatches on
-   `GetChannelStreamProperties`/`OpenRecordedStream`/
-   `CloseRecordedStream`/`ReadRecordedStream`/`SeekRecordedStream`/
-   `LengthRecordedStream`, all six exactly matching the API's real,
-   deliberate signature change, not a bug in this addon's code. CoreELEC's
-   actual latest stable release is `21.3-Omega` (confirmed against
-   CoreELEC's own GitHub releases), tracking Kodi 21/Omega -- the same
-   branch this addon's Windows/Linux CI already targets
-   (`KODI_BRANCH` in `.github/workflows/build.yml`) and what a real device
-   almost certainly runs unless deliberately flashed onto a dev/nightly
-   build. This is the branch that actually built successfully:
+   CoreELEC major version -- **use the branch matching the CoreELEC
+   release actually installed on the device**: `coreelec-22` tracks Kodi
+   22 "Piers", which is what this branch targets, and `coreelec-21` tracks
+   Kodi 21 "Omega", which this repo's `Omega` branch targets.
+
+   History worth keeping, because it is what this branch exists to fix:
+   `coreelec-22` previously failed to cross-compile this addon outright,
+   with `override` mismatches on `GetChannelStreamProperties`/
+   `OpenRecordedStream`/`CloseRecordedStream`/`ReadRecordedStream`/
+   `SeekRecordedStream`/`LengthRecordedStream`. All six were real,
+   deliberate signature changes in the Kodi 22 PVR API (the
+   recorded-stream methods gained a `streamId` for concurrent-stream
+   support; `GetChannelStreamProperties` gained a `PVR_SOURCE`), not bugs
+   in this addon -- and this branch implements the Kodi 22 signatures, so
+   that build now succeeds. The trade is one-way: a `coreelec-21` build of
+   this branch will fail the same way in reverse, because those signatures
+   no longer match Kodi 21's API. On a device still running CoreELEC 21
+   (`21.3-Omega` was its last Omega stable), build the `Omega` branch.
+
+   For a Kodi 22 device:
    ```bash
-   git clone --branch coreelec-21 --depth 1 https://github.com/CoreELEC/CoreELEC.git
+   git clone --branch coreelec-22 --depth 1 https://github.com/CoreELEC/CoreELEC.git
    mkdir -p CoreELEC/packages/mediacenter/kodi-binary-addons/pvr.dispatcharr-unofficial
    cp packaging/coreelec/pvr.dispatcharr-unofficial/package.mk \
      CoreELEC/packages/mediacenter/kodi-binary-addons/pvr.dispatcharr-unofficial/
@@ -433,10 +440,14 @@ called out inline so a future rebuild doesn't have to rediscover them.
    `aarch64`:
    - **Device**: confirm by reading the target branch's own source tree
      for which device directory under `projects/Amlogic-ce/devices/` ships
-     `Odroid_N2_boot.ini`. On `coreelec-21` it's `Amlogic-ng` (confirmed
-     live -- `coreelec-22`, which this doc no longer recommends, instead
-     used a single combined `Amlogic-no` device that doesn't exist on
-     `coreelec-21`).
+     `Odroid_N2_boot.ini`. On `coreelec-22` it's a single combined
+     `Amlogic-no` device; on `coreelec-21` it was `Amlogic-ng`, which
+     doesn't exist on `coreelec-22` (both confirmed live, by reading each
+     branch's own device tree). The `DEVICE=` value in the build command
+     below is written for `coreelec-21`, the combination this section was
+     originally verified end to end against -- on `coreelec-22` substitute
+     `DEVICE=Amlogic-no`, and re-confirm `ARCH` the way the next bullet
+     describes rather than assuming the 32-bit answer below still holds.
    - **Arch**: CoreELEC's own official `21.3-Omega` release for this
      device is literally named
      `CoreELEC-Amlogic-ng.arm-21.3-Omega-Odroid_N2.img.gz` (confirmed

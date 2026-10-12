@@ -24,6 +24,15 @@ PLUGINS = ("timeshift_buffer", "recording_edl")
 
 _SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
+# The addon's own version may carry a release suffix after the semver core, which the two plugins' may not.
+# Two reasons it has to be allowed here: Kodi's own addon-version grammar is `epoch:version-release`, so a
+# `-<release>` part is a first-class part of the version it parses (and a non-empty release sorts *above* an
+# empty one, which is what makes a Kodi 22 build upgrade cleanly over the same core version built for Kodi
+# 21); and this project has shipped suffixed addon versions before -- `1.0.0-beta.1` through `-beta.3`, listed
+# in docs/RELEASE_HISTORY.md and named as the convention by .github/workflows/build.yml's own tag trigger.
+# The core must still be semver, and addon.xml.in and package.mk must still agree exactly.
+_ADDON_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$")
+
 
 def _addon_xml_version() -> str:
     text = ADDON_XML_IN.read_text(encoding="utf-8")
@@ -57,7 +66,7 @@ def _plugin_py_version(plugin: str) -> str:
 
 def test_addon_version_is_semver_and_matches_the_coreelec_package():
     version = _addon_xml_version()
-    assert _SEMVER.match(version), version
+    assert _ADDON_VERSION.match(version), version
     assert _package_mk_version() == version, "addon.xml.in and packaging/coreelec/.../package.mk disagree"
 
 

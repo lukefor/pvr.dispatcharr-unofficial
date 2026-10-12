@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [Omega]
+    branches: [Omega, Piers]
     # No "v" prefix: matches this project's own tagging convention
     # (0.4.0, 1.0.0-beta.1, ...), confirmed against actual tag pushes --
     # "v*" here previously matched none of them, so the tag trigger below
@@ -25,12 +25,15 @@ permissions:
   contents: read
 
 env:
-  KODI_BRANCH: Omega # the Kodi release line this build targets (names the line; the commit below is what is built)
+  KODI_BRANCH: Piers # the Kodi release line this build targets (names the line; the commit below is what is built)
   # The exact Kodi commit every job builds against: the head of KODI_BRANCH when it was last verified (the same tree
   # the by-hand and glue builds use). A moving branch meant a release build could pick up whatever Kodi pushed that
   # day. To move it: set this to a newer head of KODI_BRANCH, run the workflow, and update docs/BUILDING.md's step 1
   # if the checkout changes shape; tools/tests/test_dependency_pins.py checks it stays a full commit SHA.
-  KODI_COMMIT: f8815ee40f49a700c047982d752be4b2a61420e2
+  # Pinned to the `22.0rc1-Piers` tag's own commit rather than to whatever the branch head was: Piers is an
+  # active branch (its head moved twice while this change was being prepared), and a tagged release point is
+  # both reproducible and the exact tree this addon's Kodi 22 signatures were compiled against.
+  KODI_COMMIT: 28ea2eac1eb7af8fdcbd2672d933ce87f594be79
 
 jobs:
   # Enforces CLAUDE.md's "run clang-format/ruff format before committing"

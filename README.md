@@ -16,11 +16,16 @@ directly onto Dispatcharr's own backend and settings.
 **Platforms**: Windows, macOS, Linux, CoreELEC (tested on an ODROID N2+),
 and Android (arm/arm64, tested on real 32-bit and 64-bit ARM devices).
 
-**Kodi version**: built and tested against Kodi 21 ("Omega"). Kodi
-enforces binary-addon compatibility based on what a build actually
-compiled against, not something this addon's own `addon.xml` declares a
-range for -- a different major Kodi version (older or newer) isn't
-guaranteed to load or behave correctly, and hasn't been tested.
+**Kodi version**: this is the `Piers` branch, built against Kodi 22
+("Piers"). Kodi enforces binary-addon compatibility based on what a build
+actually compiled against, not something this addon's own `addon.xml`
+declares a range for -- a different major Kodi version (older or newer)
+isn't guaranteed to load or behave correctly, and hasn't been tested.
+Kodi 22 raised the PVR instance API from 8.3.0 to 9.2.0 and raised its
+*minimum* to 9.2.0 at the same time, so a Kodi 22 build genuinely cannot
+load in Kodi 21 and vice versa -- there is no single binary that covers
+both. **For Kodi 21, use the `Omega` branch and its own releases**, which
+this branch tracks and does not replace.
 
 **Status**: pre-1.0 and actively developed by a single maintainer --
 expect occasional rough edges. Verified against Dispatcharr `0.32.0` (and `0.31.0` before it);
